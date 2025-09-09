@@ -1,0 +1,170 @@
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+; DS1302 RTC (Time) access routines derived from BIOS module for
+; CP/M 3 (CP/M plus) by Douglas Miller.
+;
+; Adapted for NCSuper89 cpu board designed by Norberto Collado
+;
+; Copyright (c) 2017 Douglas Miller <durgadas311@gmail.com>
+;
+;
+; Modified to be called from C/80 by Glenn Roberts, August 2025
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+	.Z80
+
+RTC	EQU	081H		; port address
+
+DS$CE	EQU	00010000B	; CE bit toggle
+DS$WEN	EQU	00100000B	; Write Enable (enabled low)
+DS$CLK	EQU	01000000B	; SCLK bit toggle
+
+;
+;	Public routines defined in this module:
+;
+	PUBLIC	DSIN,DSOUT,DSEND,DSCMD
+;
+	CSEG
+
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+; DSIN - Input a byte from DS1302 (assumes read command already sent)
+;
+; C/80 syntax:	c = dsin();
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+DSIN:	CALL	DSGET		; get a byte from DS1302
+	LD	H,0		; return result in HL
+	LD	L,E
+	RET
+
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+; DSOUT - Output a byte to DS1302
+;
+; C/80 syntax:	dsout(c);
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+DSOUT:	POP	BC		; return
+	POP	DE		; byte to send in E
+	PUSH	DE		; restore the stack
+	PUSH	BC
+	
+	JP	DSPUT		; continue with DSPUT...
+	
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+; DSGET - Get a byte from DS1302
+;
+; ENTRY:
+;	Read command already sent
+; EXIT:
+;	Byte returned in E
+;	rtc ctrl port same state as entry (ds$clk high)
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+DSGET:	LD	E,0		; Clear result
+	LD	B,8		; reading 8 bits
+	LD	A,(DS$CTL)	; control byte
+	OR	DS$WEN		; disable write
+	
+DSG1:	AND	NOT DS$CLK	; set clock low
+	OUT	(RTC),A		; do it
+	NOP			; pause >= 250ns
+	PUSH	AF		; preserve control byte
+	IN	A,(RTC)		; read the data line
+	RRA			; rotate bit into 'C'
+	RR	E		; rotate bit into result
+	POP	AF		; restore control byte
+	OR	DS$CLK		; set clock high
+	OUT	(RTC),A		; do it
+	NOP			; pause >= 250ns
+	DJNZ	DSG1		; loop 'til have 8 bits
+	
+	LD	(DS$CTL),A	; update control byte
+	RET			; done!
+
+
+
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+; DSPUT - Output a byte to DS1302
+;
+; ENTRY:
+;	E:	Byte to be sent
+; EXIT:
+;	E destroyed
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+DSPUT:	LD	B,8		; 8 bits
+	LD	A,(DS$CTL)	; fetch control byte
+	AND	NOT DS$WEN	; enable write
+
+.DSP1:	AND	NOT DS$CLK	; set clock low
+	OUT	(RTC),A		; do it
+	NOP			; pause >= 250ns
+	RLA			; pop off data bit
+	RR	E		; next data bit to 'C'
+	RRA			; new data bit in place
+	OUT	(RTC),A		; send the bit!
+	OR	DS$CLK		; set clock high
+	OUT	(RTC),A		; do it
+	NOP			; pause >= 250ns
+	DJNZ	.DSP1		; loop 'til sent 8 bits
+
+; done - leave clk high, /we asserted, data = ?
+
+	LD	(DS$CTL),A	; save control byte
+	RET			; done!
+
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+; DSEND - End communication with DS1302 placing it in idle state
+;
+; C/80 syntax:	dsend();
+;	return value undefined
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+DSEND:	LD	A,DS$WEN	; disable write
+	OUT	(RTC),A		; do it
+	LD	(DS$CTL),A	; save control byte
+	RET			; done!
+
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+; DSCMD - Send command to DS1302
+;
+; C/80 syntax:	dscmd(c);
+;	int c = command byte
+;	return value undefined
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+DSCMD:	POP	BC		; return
+	POP	DE		; E = byte to send
+	PUSH	DE		; fix the stack
+	PUSH 	BC
+	
+	CALL	DSEND		; Force idle
+	NOP			; pause >= 1us
+	NOP
+	NOP
+	NOP
+	
+	OR	DS$CE		; assert CE on DS1302
+	OUT	(RTC),A		; do it
+	LD	(DS$CTL),A	; save control byte
+	NOP			; pause >= 1us
+	NOP
+	NOP
+	NOP
+	
+	CALL	DSPUT		; output the byte
+	RET			; done!
+;
+;	Local copy of control (command) byte
+;
+DS$CTL:	DB	0
+
+	END
